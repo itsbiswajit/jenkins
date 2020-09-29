@@ -1,0 +1,15 @@
+1. Create a folder "email-templates" inside #JENKINS_HOME, Example : "C:\Program Files (x86)\Jenkins"
+2. place the template file inside the "email-templates" folder. example: File location- "C:\Program Files (x86)\Jenkins\email-templates\email_notification_custom.template"
+2. Install "Email Notification Extention" Jekins Plugin
+3. Configure "Extended Email Notification"
+        a. Manage Jenkins-> Configure System-> Extended E-mail Notification
+        b. Set Up all parameter as :
+              1. SMTP server : smtp.gmail.com
+              2. Enable "Use SMTP Authentication" from Advance Setting 
+              3. User Name : <Your Email id>
+              4. Password : <Email password/app generated password>
+              5. Use SSL: Enabled
+              6. SMTP port : 465
+        c. Go to your Gmail, Dissable 2 factor Authentication and rfresh the page , now you can see "allow less secure app option", enabled this option
+        d add you pipeline code generated from "pipeline syntax" for emailext plugin.
+4. All the supported image and pipeline codes are added here

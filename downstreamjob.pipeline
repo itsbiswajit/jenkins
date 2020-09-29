@@ -1,0 +1,164 @@
+pipeline {
+    agent none
+    stages {
+        stage('INITIALIZE BUILD') {
+            steps {
+                script {
+                    if ("${BUILD_NAME}") {
+                        script {
+                            currentBuild.displayName = "${BUILD_NAME}_${TEST_PLATFORM}_${env.BUILD_NUMBER}"
+                        }
+                    }
+                }
+            }
+        }
+        stage('Check Out Git Code'){
+            agent { node { label "${TEST_NODE}" } }
+            steps {
+				script {
+					def project_git_url = "${PROJECT_GIT_URL}"
+					echo "Cleaning Up the Workspcae ..."
+					cleanWs()
+					downloadCode(project_git_url)
+				}
+            }
+        }
+		
+		stage('Update Config File'){
+            agent { node { label "${TEST_NODE}" } }
+
+            steps {
+				script {
+					update_config_file()
+				}
+            }
+        }
+        stage('Test Execution'){
+            agent { node { label "${TEST_NODE}" } }
+            steps {
+				script {
+					test_execution()
+				}
+            }
+        }
+		stage('Results'){
+            agent { node { label "${TEST_NODE}" } }
+            steps {
+                    echo "Test Results "
+					get_result()
+					upload_artifactory()
+            }
+        }
+		stage('Upload artifactory'){
+            agent { node { label "${TEST_NODE}" } }
+            steps {
+					upload_artifactory()
+            }
+        }
+    }
+	post {
+        always  {
+            echo "Build completed. currentBuild.result = ${currentBuild.result}"
+		    emailext (
+		    subject: "Job Satus :'${currentBuild.result}' Job ID: ${env.BUILD_NUMBER}",
+		    body: "Check console output of ${env.JOB_NAME} at : ${env.BUILD_URL}",
+		    to: "${EMAIL_LIST}"
+		)
+    }
+   }
+}
+
+
+def downloadCode(git_url){
+	echo "Git Repository: " + git_url
+	checkout([$class: 'GitSCM',
+	branches: [[name: 'FETCH_HEAD']],
+	doGenerateSubmoduleConfigurations: false,
+	extensions: [],
+	submoduleCfg: [],
+	userRemoteConfigs: [[credentialsId: "${USER_CREDENTIAL}",
+						 refspec: '${PROJECT_GIT_REFSPEC}',
+						 url: git_url]]
+	])
+}
+
+def update_config_file(){
+	echo "Updating Config File"
+	withCredentials([[$class: 'UsernamePasswordMultiBinding',
+					  credentialsId:"${USER_CREDENTIAL}",
+					  usernameVariable: 'USER_NAME',
+					  passwordVariable: 'USER_PASSWORD']]){
+		if ("${TEST_PLATFORM}".toLowerCase().contains('win')){
+			powershell """
+				set PYTHONPATH=%cd%
+				python -m utils.update_config --username "${USER_NAME}" --password "${USER_PASSWORD}"
+			"""
+		}else if("${TEST_PLATFORM}".toLowerCase().contains('mac')){
+			sh """
+				export PYTHONPATH="${env.WORKSPACE}"
+				python3 -m utils.update_config --username "${USER_NAME}" --password "${USER_PASSWORD}" --bsp_path "${BSP_PATH}" --scs_path "${SCS_PATH}"
+			"""
+		}
+	}
+}
+
+def test_execution(){
+	echo "Executing Test ..."
+	withCredentials([[$class: 'UsernamePasswordMultiBinding',
+					  credentialsId:"${QAC_CREDENTIAL}",
+					  usernameVariable: 'QAC_USER_NAME',
+					  passwordVariable: 'QAC_PASSWORD']]){
+		if ("${TEST_PLATFORM}".toLowerCase().contains('win')){
+			bat """
+				set PYTHONPATH=%cd%
+				python -m qac_runner.cobain_qac_test_runner --username "${QAC_USER_NAME}" --password "${QAC_PASSWORD}" --project "${PROJECT_NAME}" --testset "${QAC_TEST_SET}_Win"
+			"""
+		}else if("${TEST_PLATFORM}".toLowerCase().contains('mac')){
+			sh """
+				export PYTHONPATH="${env.WORKSPACE}"
+				python3 -m qac_runner.cobain_qac_test_runner --username "${QAC_USER_NAME}" --password "${QAC_PASSWORD}" --project "${PROJECT_NAME}" --testset "${QAC_TEST_SET}_Mac"
+			"""
+		}
+	}
+}
+def get_result(){
+    if ("${TEST_PLATFORM}".toLowerCase().contains('win')){
+	    powershell """
+	    	echo "${env.WORKSPACE}"
+	    	\$source = "${WORKSPACE}\\logs"
+	    	\$destination = "${WORKSPACE}\\logs.zip"
+	    	echo \$source > sourcefile
+	    	echo \$destination > destinationfile
+	    	Add-Type -assembly "system.io.compression.filesystem"
+	    	[io.compression.zipfile]::CreateFromDirectory(\$source, \$destination)
+	    """
+	}
+	else if("${TEST_PLATFORM}".toLowerCase().contains('mac')){
+	    sh """
+	    	zip -r "${env.WORKSPACE}/logs.zip" logs/
+	    """
+	}
+}
+
+def upload_artifactory(){
+	echo 'Uploading to Artifactory'
+	echo "${ARTIFACTORY_UPLOAD_PATH}/${PROJECT_NAME}/${BUILD_ID}/"
+    script {
+        def server = Artifactory.server('edi-art-prod-01')
+        server.credentialsId = "ff8d1f08-e475-403d-9fef-62ea84a6434c"
+
+        def uploadSpec = """{
+          "files": [
+            {
+              "pattern": "${env.WORKSPACE}/logs.zip",
+              "target": "${ARTIFACTORY_UPLOAD_PATH}/${BUILD_NAME}/${BUILD_ID}/"
+            }
+         ]
+        }""".stripIndent()
+		
+        def buildInfo = Artifactory.newBuildInfo()
+        buildInfo.env.capture = true
+        buildInfo=server.upload(uploadSpec)
+        server.publishBuildInfo(buildInfo)
+    }
+}

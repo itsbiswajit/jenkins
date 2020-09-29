@@ -1,0 +1,315 @@
+Artifactory - Working With the Pipeline Jenkins Plugin
+reference : https://wiki.jenkins.io/pages/viewpage.action?pageId=103088809
+
+
+
+TABLE OF CONTENTS
+
+Introduction
+Using the Artifactory DSL
+Creating an Artifactory Server Instance
+Uploading and Downloading Files
+Publishing Build-Info to Artifactory
+Capturing Environment Variables
+Triggering Build Retention
+Promoting Builds in Artifactory
+Maven Builds with Artifactory
+Gradle Builds with Artifactory
+Docker Builds with Artifactory
+Advanced Upload Options
+Using Placeholders
+Using Regular Expressions
+File Spec Schema
+Examples
+Introduction
+The Pipeline Jenkins Plugin simplifies building a continuous delivery pipeline with Jenkins by creating a script that defines the steps of your build. For those not familiar with Jenkins Pipeline, please refer to the Pipeline Tutorial or the Getting Started With Pipeline documentation.
+
+The Jenkins Artifactory Plugin has been extended to support Artifactory operations as part of the Pipeline script DSL. You have the added option of downloading dependencies, uploading artifacts, and publishing build-info to Artifactory from a Pipeline script.
+
+Using the Artifactory DSL
+Creating an Artifactory Server Instance
+To upload or download files to and from your Artifactory server, you need to create an Artifactory server instance in your Pipeline script.
+
+If your Artifactory server is already defined in Jenkins, you only need its server ID which can be obtained  under Manage | Configure System.
+
+Then, to create your Artifactory server instance, add the following line to your script:
+
+def server = Artifactory.server 'my-server-id'
+If your Artifactory is not defined in Jenkins you can still create it as follows:
+
+def server = Artifactory.newServer url: 'artifactory-url', username: 'username', password: 'password'
+You can also user Jenkins Credential ID instead of username and password:
+
+def server = Artifactory.newServer url: 'artifactory-url', credentialsId: 'ccrreeddeennttiiaall'
+You can modify the server object using the following methods:
+
+server bypassProxy = true
+// If you're using username and password:
+server username = 'new-user-name'
+server password = 'new-password'
+// If you're using Credentials ID:
+server credentialsId = 'ccrreeddeennttiiaall'
+Use variables
+
+We recommend using variables rather than plain text to specify the Artifactory server details.
+
+Uploading and Downloading Files
+To upload or download files you first need to create a spec which is a JSON file that specifies which files should be uploaded or downloaded and the target path.
+
+For example:
+
+def downloadSpec = """{
+ "files": [
+  {
+      "pattern": "bazinga-repo/*.zip",
+      "target": "bazinga/"
+    }
+ ]
+}"""
+The above spec specifies that all ZIP files in the bazinga-repo Artifactory repository should be downloaded into the bazinga directory on your Jenkins agent file system.
+
+"files" is an array
+
+Since the "files" element is an array, you can specify several patterns and corresponding targets in a single download spec.
+
+To download the files, add the following line to your script:
+
+server.download(downloadSpec)
+Uploading files is very similar. The following example uploads all ZIP files that include froggy in their names into the froggy-files folder in the bazinga-repo Artifactory repository.
+
+def uploadSpec = """{
+  "files": [
+    {
+      "pattern": "bazinga/*froggy*.zip",
+      "target": "bazinga-repo/froggy-files/"
+    }
+ ]
+}"""
+server.upload(uploadSpec)
+Publishing Build-Info to Artifactory
+Both the download and upload methods return a build-info object which can be published to Artifactory as shown in the following examples:
+
+def buildInfo1 = server.download(downloadSpec)
+def buildInfo2 = server.upload(uploadSpec)
+buildInfo1.append(buildInfo2)
+server.publishBuildInfo(buildInfo1)
+def buildInfo = Artifactory.newBuildInfo()
+server.download(artifactoryDownloadDsl, buildInfo)
+server.upload(artifactoryUploadDsl, buildInfo)
+server.publishBuildInfo(buildInfo)
+Capturing Environment Variables
+To set the Build-Info object to automatically capture environment variables while downloading and uploading files, add the following to your script:
+
+def buildInfo = Artifactory.newBuildInfo()
+buildInfo.env.capture = true
+By default, environment variables named "password", "secret", or "key" are excluded and will not be published to Artifactory.
+
+You can add more include/exclude patterns as follows:
+
+def buildInfo = Artifactory.newBuildInfo()
+buildInfo.env.filter.addInclude("*a*")
+buildInfo.env.filter.addExclude("DONT_COLLECT*")
+Here's how you reset to the include/exclude patterns default values:
+
+buildInfo.env.filter.reset()
+You can also completely clear the include/exclude patterns:
+
+buildInfo.env.filter.clear()
+To collect environment variables at any point in the script, use:
+
+buildInfo.env.collect()
+You can get the value of an environment variable collected as follows:
+
+value = buildInfo.env.vars['env-var-name']
+Triggering Build Retention
+To trigger build retention when publishing build-info to Artifactory, use the following method:
+
+buildInfo.retention maxBuilds: 10
+buildInfo.retention maxDays: 7
+// deleteBuildArtifacts is false by default.
+ 
+buildInfo.retention maxBuilds: 10, maxDays: 7, doNotDiscardBuilds: ["3", "4"], deleteBuildArtifacts: true
+Promoting Builds in Artifactory
+To promote a build between repositories in Artifactory, define the promotion parameters in a promotionConfig object and promote that. For example:
+
+def promotionConfig = [
+    // Mandatory parameters
+    'buildName'          : buildInfo.name,
+    'buildNumber'        : buildInfo.number,
+    'targetRepo'         : 'libs-release-local',
+ 
+    // Optional parameters
+    'comment'            : 'this is the promotion comment',
+    'sourceRepo'         : 'libs-snapshot-local',
+    'status'             : 'Released',
+    'includeDependencies': true,
+    'copy'               : true
+]
+ 
+// Promote build
+server.promote promotionConfig
+Maven Builds with Artifactory
+Maven builds can resolve dependencies, deploy artifacts and publish build-info to Artifactory. To run Maven builds with Artifactory from your Pipeline script, you first need to create an Artifactory server instance, as described at the beginning of this article.
+Here's an example:
+
+def server = Artifactory.server('my-server-id')
+The next step is to create an Artifactory Maven Build instance:
+
+def rtMaven = Artifactory.newMavenBuild()
+Now let's define where the Maven build should download its dependencies from. Let's say you want the release dependencies to be resolved from the 'libs-release' repository and the snapshot dependencies from the 'libs-snapshot' repository. Both repositories are located on the Artifactory server instance you defined above. Here's how you define this, using the Artifactory Maven Build instance we created:
+
+rtMaven.resolver server: server, releaseRepo: 'libs-release', snapshotRepo: 'libs-snapshot'
+Now let's define where our build artifacts should be deployed to. Once again, we define the Artifactory server and repositories on the 'rtMaven' instance:
+
+rtMaven.deployer server: server, releaseRepo: 'libs-release-local', snapshotRepo: 'libs-snapshot-local'
+By default, all the build artifacts are deployed to Artifactory. In case you want to deploy only some artifacts, you can filter them based on their names, using the 'addInclude' method. In the following example, we are deploying only artifacts with names that start with 'frog'
+
+rtMaven.deployer.artifactDeploymentPatterns.addInclude("frog*")
+You can also exclude artifacts from being deployed. In the following example, we are deploying all artifacts, except for those that are zip files:
+
+rtMaven.deployer.artifactDeploymentPatterns.addExclude("*.zip")
+And to make things more interesting, you can combine both methods. For example, to deploy all artifacts with names that start with 'frog', but are not zip files, do the following:
+
+rtMaven.deployer.artifactDeploymentPatterns.addInclude("frog*").addExclude("*.zip")
+If you'd like to add custom properties to the deployed artifacts, you can do that as follows:
+
+rtMaven.deployer.addProperty("status", "in-qa").addProperty("compatibility", "1", "2", "3")
+In some cases, you want to disable artifacts deployment to Artifactory or make the deployment conditional. Here's how you do it:
+
+rtMaven.deployer.deployArtifacts = false
+To select a Maven installation for our build, we should define a Maven Tool through Jenkins Manage, and then, set the tool name as follows:
+
+rtMaven.tool = 'maven tool name'
+Here's how you define Maven options for your build:
+
+rtMaven.opts = '-Xms1024m -Xmx4096m'
+In case you'd like Maven to use a different JDK than your build agent's default, no problem.
+Simply set the JAVA_HOME environment variable to the desired JDK path (the path to the directory above the bin directory, which includes the java executable).
+Here's you do it:
+
+env.JAVA_HOME = 'path to JDK'
+OK, we're ready to run our build. Here's how we define the pom file path (relative to the workspace) and the Maven goals. The deployment to Artifactory is performed during the 'install' phase:
+
+def buildInfo = rtMaven.run pom: 'maven-example/pom.xml', goals: 'clean install'
+The above method runs the Maven build. At the beginning of the build, dependencies are resolved from Artifactory and at the end of it, artifacts are deployed to Artifactory.
+What about the build information?
+The build information has not yet been published to Artifactory, but it is stored locally in the 'buildInfo' instance returned by the 'run' method. You can now publish it to Artifactory as follows:
+
+server.publishBuildInfo buildInfo
+You can also merge multiple buildInfo instances into one buildInfo instance and publish it to Artifactory as one build, as described in the 'Publishing Build-Info to Artifactory' section in this article.
+
+Gradle Builds with Artifactory
+Gradle builds can resolve dependencies, deploy artifacts and publish build-info to Artifactory. To run Gradle builds with Artifactory from your Pipeline script, you first need to create an Artifactory server instance, as described at the beginning of this article.
+Here's an example:
+
+def server = Artifactory.server 'my-server-id'
+The next step is to create an Artifactory Gradle Build instance:
+
+def rtGradle = Artifactory.newGradleBuild()
+Now let's define where the Gradle build should download its dependencies from. Let's say you want the dependencies to be resolved from the 'libs-release' repository, located on the Artifactory server instance you defined above. Here's how you define this, using the Artifactory Gradle Build instance we created:
+
+rtGradle.resolver server: server, repo: 'libs-release'
+Now let's define where our build artifacts should be deployed to. Once again, we define the Artifactory server and repositories on the 'rtGradle' instance:
+
+rtGradle.deployer server: server, repo: 'libs-release-local'
+By default, all the build artifacts are deployed to Artifactory. In case you want to deploy only some artifacts, you can filter them based on their names, using the 'addInclude' method. In the following example, we are deploying only artifacts with names that start with 'frog'
+
+rtGradle.deployer.artifactDeploymentPatterns.addInclude("frog*")
+You can also exclude artifacts from being deployed. In the following example, we are deploying all artifacts, except for those that are zip files:
+
+rtGradle.deployer.artifactDeploymentPatterns.addExclude("*.zip")
+And to make things more interesting, you can combine both methods. For example, to deploy all artifacts with names that start with 'frog', but are not zip files, do the following:
+
+rtGradle.deployer.artifactDeploymentPatterns.addInclude("frog*").addExclude("*.zip")
+If you'd like to add custom properties to the deployed artifacts, you can do that as follows:
+
+rtGradle.deployer.addProperty("status", "in-qa").addProperty("compatibility", "1", "2", "3")
+In some cases, you want to disable artifacts deployment to Artifactory or make the deployment conditional. Here's how you do it:
+
+deployer.deployer.deployArtifacts = deployToArtifactory
+In case the "com.jfrog.artifactory" Gradle Plugin is already applied in your Gradle script, we need to let Jenkins know it shouldn't apply it. Here's how we do it:
+
+rtGradle.usesPlugin = true
+To select a Gradle installation for our build, we should define a Gradle Tool through Jenkins Manage, and then, set the tool name as follows:
+
+rtMaven.tool = 'gradle tool name'
+In case you'd like Maven to use a different JDK than your build agent's default, no problem.
+Simply set the JAVA_HOME environment variable to the desired JDK path (the path to the directory above the bin directory, which includes the java executable).
+Here's you do it:
+
+env.JAVA_HOME = 'path to JDK'
+OK, looks like we're ready to run our Gradle build. Here's how we define the build.gradle file path (relative to the workspace) and the Gradle tasks. The deployment to Artifactory is performed as part of the 'artifactoryPublish' task:
+
+def buildInfo = rtGradle.run rootDir: "projectDir/", buildFile: 'build.gradle', tasks: 'clean artifactoryPublish'
+The above method runs the Gradle build. At the beginning of the build, dependencies are resolved from Artifactory and at the end of it, artifacts are deployed to Artifactory.
+What about the build information?
+The build information has not yet been published to Artifactory, but it is stored locally in the 'buildInfo' instance returned by the 'run' method. You can now publish it to Artifactory as follows:
+
+server.publishBuildInfo buildInfo
+You can also merge multiple buildInfo instances into one buildInfo instance and publish it to Artifactory as one build, as described in the 'Publishing Build-Info to Artifactory' section in this article.
+
+That's it! We're all set.
+
+The rtGradle instance supports additional configuration APIs. You can use these APIs as follows:
+
+def rtGradle = Artifactory.newGradleBuild()
+// Deploy Maven descriptors to Artifactory:
+rtGradle.deployer.deployMavenDescriptors = true
+// Deploy Ivy descriptors (pom.xml files) to Artifactory:
+rtGradle.deployer.deployIvyDescriptors = true
+ 
+// The following properties are used for Ivy publication configuration.
+// The values below are the defaults.
+ 
+// Set the deployed Ivy descriptor pattern:
+rtGradle.deployer.ivyPattern = '[organisation]/[module]/ivy-[revision].xml'
+// Set the deployed Ivy artifacts pattern:
+rtGradle.deployer.artifactPattern = '[organisation]/[module]/[revision]/[artifact]-[revision](-[classifier]'
+// Set mavenCompatible to true, if you wish to replace dots with slashes in the Ivy layout path, to match the Maven layout:
+rtGradle.deployer.mavenCompatible = true
+Docker Builds with Artifactory
+The Jenkins Artifactory Plugin supports a Pipeline DSL that enables you to collect and publish build-info to Artifactory for your Docker builds. To collect the build-info, the plugin uses an internal HTTP proxy server, which captures the traffic between the Docker Daemon and your Artifactory reverse proxy. To setup your Jenkins build agents to collect build-info for your Docker builds, please refer to the setup instructions
+
+// Create an Artifactory server instance, as described above in this article:
+def server = Artifactory.server 'my-server-id'
+// Create an Artifactory Docker instance, using your Artifactory username and password:
+def rtDocker = Artifactory.docker username: 'artifactory-username', password: 'artifactory-password'
+ 
+// Use credentials plugin to define Artifactory Docker instance:
+// def rtDocker = Artifactory.docker credentialsId: 'ccrreeddeennttiiaall'
+ 
+// Push a docker image to Artifactory (here we're pushing hello-world:latest). The push method also expects
+// Artifactory repository name:
+def buildInfo = rtDocker.push('<artifactory-docker-registry-url>/hello-world:latest', '<target-artifactory-repository>')
+// Publish the build-info to Artifactory:
+server.publishBuildInfo buildInfo
+Advanced Upload Options
+Using Placeholders
+The upload spec provides flexibility in how you define the target path by using wildcard or regular expressions with placeholders. Any wildcard enclosed in parenthesis in the source path can be matched with a corresponding placeholder in the target path to determine the name of the artifact once uploaded.
+
+In the following example, for each .tgz file in the source directory, a corresponding directory with the same name is created in the target repository and the file is created in the corresponding directory.
+
+For example, a file called froggy.tgz is uploaded to my-local-rep/froggy/froggy.tgz.
+
+def uploadSpec = """{
+  "files": [
+    {
+      "pattern": "(*).tgz",
+      "target": "my-local-repo/{1}/"
+      "recursive": "false"
+    }
+ ]
+}"""
+Using Regular Expressions
+Instead of using wildcard patterns, you can use regular expressions. You just need to add "regexp" : "true" to the spec as in the following example:
+
+def uploadSpec = """{
+  "files": [
+    {
+      "pattern": "(.*).tgz",
+      "target": "my-local-repo/{1}/"
+      "recursive": "false"
+      "regexp": "true"
+    }
+ ]
+}"""

@@ -1,0 +1,156 @@
+pipeline {
+    agent none
+	environment {
+        scs_deploy_win10_result = "FAIL"
+        scs_deploy_mac_catalina_result = "FAIL"
+
+        bsp_deploy_win10_result = "FAIL"
+        bsp_deploy_mac_catalina_result = "FAIL"
+
+        sanity_win10_result = "FAIL"
+        sanity_mac_catalina_result = "FAIL"
+
+        regression_win10_result = "FAIL"
+        regression_mac_catalina_result = "FAIL"
+    }
+    stages {
+        stage('INITIALIZE BUILD') {
+            steps {
+                script {
+                    if ("${BUILD_NAME}") {
+                        script {
+                            currentBuild.displayName = "${BUILD_NAME}_${env.BUILD_NUMBER}"
+                        }
+                    }
+                }
+            }
+        }
+        stage('SCS_Install'){
+            parallel {
+                stage('SCS_Install-Win10'){
+                    when {
+                        expression { ("${TEST_PLATFORM}".contains("win10") ) }
+                    }
+                    steps{
+                        script {
+                            scs_deploy_win10_result = launch_job("win10", "${WIN10_NODE}", "SCS_Install")
+                        }
+                    }
+                }
+                stage('SCS_Install-MAC_CATALINA'){
+                    when {
+                        expression { ("${TEST_PLATFORM}".contains("mac_catalina") ) }
+                    }
+                    steps{
+                        script {
+                            scs_deploy_mac_catalina_result = launch_job("mac_catalina", "${MAC_NODE}", "SCS_Install")
+                        }
+                    }
+                }
+            }
+        }
+        stage('BSP_Install'){
+            parallel {
+                stage('BSP_Install-Win10'){
+                    when {
+                        expression { ("${TEST_PLATFORM}".contains("win10") ) }
+                    }
+                    steps{
+                        script {
+                            bsp_deploy_win10_result = launch_job("win10", "${WIN10_NODE}", "BSP_Install")
+                        }
+                    }
+                }
+                stage('BSP_Install-MAC_CATALINA'){
+                    when {
+                        expression { ("${TEST_PLATFORM}".contains("mac_catalina") ) }
+                    }
+                    steps{
+                        script {
+                            bsp_deploy_mac_catalina_result = launch_job("mac_catalina", "${MAC_NODE}", "BSP_Install")
+                        }
+                    }
+                }
+            }
+        }
+        stage('Sanity'){
+            parallel {
+                stage('Sanity-Win10'){
+                    when {
+                        expression { ("${bsp_deploy_win10_result}" == "SUCCESS") }
+                    }
+                    steps{
+                        script {
+                            sanity_win10_result = launch_job("win10", "${WIN10_NODE}", "Sanity")
+                        }
+                    }
+                }
+                stage('Sanity-MAC_CATALINA'){
+                    when {
+                        expression { ("${bsp_deploy_mac_catalina_result}" == "SUCCESS") }
+                    }
+                    steps{
+                        script {
+                            sanity_mac_catalina_result = launch_job("mac_catalina", "${MAC_NODE}", "Sanity")
+                        }
+                    }
+                }
+            }
+        }
+        stage('Regression'){
+            parallel {
+                stage('Regression-Win10'){
+                    when {
+                        expression { ("${bsp_deploy_win10_result}" == "SUCCESS")}
+                    }
+                    steps{
+                        script {
+                            regression_win10_result = launch_job("win10", "${WIN10_NODE}", "Regression")
+                        }
+                    }
+                }
+                stage('Regression-MAC_CATALINA'){
+                    when {
+                        expression { ("${bsp_deploy_mac_catalina_result}" == "SUCCESS")}
+                    }
+                    steps{
+                        script {
+                            regression_mac_catalina_result = launch_job("mac_catalina", "${MAC_NODE}", "Regression")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
+def launch_job(platform, test_node, downstream_job){
+    sleep(time:5, unit: "SECONDS")
+    job = build(job: "downstream_jobs/" + downstream_job, propagate: false, parameters: get_params_list(platform, test_node))
+    result =  job.getResult()
+    echo downstream_job + " Downstream Jobs result on " + result
+    return result
+}
+
+def get_params_list(test_platform, test_node){
+    def params_list = [
+        string(name: 'PROJECT_NAME', value: "${PROJECT_NAME}"),
+        string(name: 'SCS_PATH', value: "${SCS_PATH}"),
+        string(name: 'BSP_PATH', value: "${BSP_PATH}"),
+        string(name: 'USER_CREDENTIAL', value: "${USER_CREDENTIAL}"),
+        string(name: 'PROJECT_GIT_URL', value: "${PROJECT_GIT_URL}"),
+        string(name: 'PROJECT_GIT_REFSPEC', value: "${PROJECT_GIT_REFSPEC}"),
+        string(name: 'FRAMEWORK_GIT_URL', value: "${FRAMEWORK_GIT_URL}"),
+        string(name: 'FRAMEWORK_GIT_REFSPEC', value: "${FRAMEWORK_GIT_REFSPEC}"),
+        string(name: 'QAC_CREDENTIAL', value: "${QAC_CREDENTIAL}"),
+        string(name: 'SEND_EMAIL', value: "${SEND_EMAIL}"),
+        string(name: 'EMAIL_LIST', value: "${EMAIL_LIST}"),
+        string(name: 'UPLOAD_ARTIFACTORY', value: "${UPLOAD_ARTIFACTORY}"),
+        string(name: 'ARTIFACTORY_UPLOAD_PATH', value: "${ARTIFACTORY_UPLOAD_PATH}")
+    ]
+    params_list.add(string(name: 'TEST_PLATFORM', value: test_platform))
+	params_list.add(string(name: 'TEST_NODE', value: test_node))
+    return params_list
+}
